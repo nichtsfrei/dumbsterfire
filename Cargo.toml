@@ -7,7 +7,7 @@ edition = "2024"
 anyhow = "1"
 chrono = { version = "0", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
-hex = "0.4.3"
+hex = "0"
 html2text = "0"
 imap = "2"
 mailparse = "0"
