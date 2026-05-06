@@ -87,7 +87,6 @@ pub fn process_emails(base_dir: &Path, rule_path: &Path, extract_on_match: bool)
     if content.is_empty() {
         eprintln!("Warning: No filter rules found in {rule_path:?}");
     }
-    println!("aha");
     let filter: Vec<_> = content
         .iter()
         .map(|(p, f)| {
@@ -140,7 +139,6 @@ pub fn process_emails(base_dir: &Path, rule_path: &Path, extract_on_match: bool)
             }
         }
 
-        // Extract email if it matched any label and extraction is enabled
         if matched_any_label && extract_on_match {
             let email_path = base_dir.join(path);
             if let Err(e) = extract_email(&email_path) {

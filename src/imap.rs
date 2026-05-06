@@ -21,12 +21,14 @@ pub fn download(config: &Config) -> Result<()> {
 
     let mut session = match client.login(&config.username, &config.password) {
         Ok(s) => s,
-        Err(_) => return Err(Error::Login {
-            host: config.host.clone(),
-            port: config.port,
-            username: config.username.clone(),
+        Err(_) => {
+            return Err(Error::Login {
+                host: config.host.clone(),
+                port: config.port,
+                username: config.username.clone(),
+            }
+            .into());
         }
-        .into()),
     };
 
     let server_dir = PathBuf::from(&config.output_dir).join(&config.host);
@@ -34,11 +36,13 @@ pub fn download(config: &Config) -> Result<()> {
 
     let folders = match session.list(Some(""), Some("%")) {
         Ok(f) => f,
-        Err(_) => return Err(Error::FolderList {
-            host: config.host.clone(),
-            port: config.port,
+        Err(_) => {
+            return Err(Error::FolderList {
+                host: config.host.clone(),
+                port: config.port,
+            }
+            .into());
         }
-        .into()),
     };
 
     for folder in folders.iter() {
@@ -62,26 +66,47 @@ fn process_folder(
 ) -> Result<()> {
     let folder_dir = base_dir.join(Sanitized::from(folder).to_str());
 
-    println!("Processing folder: {}...", folder);
-
+    println!("{folder}\tselect");
     session.select(folder)?;
+    // TODO: after processing create timestamp for this folder
+    // TODO: if there is a stpred timestamp use SINCE $timestamp
+    const SEARCH_FILTER: &str = "ALL";
+    println!("{folder}\tsearch\t{SEARCH_FILTER}");
 
-    let messages = match session.search("ALL") {
+    let messages = match session.search(SEARCH_FILTER) {
         Ok(m) => m,
-        Err(e) => return Err(Error::Search { folder: folder.to_string(), source: e }.into()),
-    };
-
-    for uid in messages.iter() {
-        let fetch = match session.fetch(uid.to_string(), "RFC822") {
-            Ok(f) => f,
-            Err(e) => return Err(Error::Fetch {
+        Err(e) => {
+            return Err(Error::Search {
                 folder: folder.to_string(),
-                uid: *uid,
                 source: e,
             }
-            .into()),
+            .into());
+        }
+    };
+    for (idx, uid) in messages.iter().enumerate() {
+        print!("{folder}:{idx}/{}\tdownloading\t", messages.len());
+        let fetch = match session.fetch(uid.to_string(), "RFC822") {
+            Ok(f) => {
+                println!("s");
+                f
+            }
+            Err(e) => {
+                println!("f");
+                return Err(Error::Fetch {
+                    folder: folder.to_string(),
+                    uid: *uid,
+                    source: e,
+                }
+                .into());
+            }
         };
 
+        println!(
+            "{folder}:{idx}/{}\tstoring\t{}",
+            messages.len(),
+            fetch.len()
+        );
+        // Potentially a bug that we just care about first?
         if let Some(msg) = fetch.first()
             && let Some(email_data) = msg.body()
         {
@@ -103,20 +128,22 @@ fn process_folder(
                 .append(true)
                 .open(&shafile_path)?;
 
-            let email_rel_path = email_path
-                .strip_prefix(base_dir)
-                .map_err(|e| Error::InvalidPath {
-                    path: email_path.display().to_string(),
-                    base: base_dir.display().to_string(),
-                    source: e,
-                })?;
+            let email_rel_path =
+                email_path
+                    .strip_prefix(base_dir)
+                    .map_err(|e| Error::InvalidPath {
+                        path: email_path.display().to_string(),
+                        base: base_dir.display().to_string(),
+                        source: e,
+                    })?;
             writeln!(shafile, "{}  {}", hash, email_rel_path.display())?;
 
             //parse_and_save_attachments(email.as_ref(), &email_dir)?;
         }
+        println!("{folder}:{idx}/{}\tprocessed", messages.len(),);
     }
 
-    println!("  Downloaded {} emails", messages.len());
+    println!("{folder}\tprocessed");
 
     Ok(())
 }

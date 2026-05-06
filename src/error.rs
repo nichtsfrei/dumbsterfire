@@ -106,10 +106,11 @@ pub enum EmailError {
     #[error("Failed to decode attachment '{path}': {err_msg}")]
     DecodeAttachment { path: String, err_msg: String },
 
-    #[error("Failed to convert HTML to markdown: {source}")]
-    HtmlToMarkdown {
+    #[error("Email path '{path}' is not valid: {source}")]
+    InvalidPath {
+        path: String,
         #[source]
-        source: std::io::Error,
+        source: std::path::StripPrefixError,
     },
 }
 

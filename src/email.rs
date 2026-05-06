@@ -18,13 +18,43 @@ pub fn extract_email(path: &Path) -> Result<()> {
         source: e,
     })?;
 
-    let email_dir = path
-        .parent()
-        .ok_or_else(|| EmailError::NoParentDir {
+    let mut current = path.parent().ok_or_else(|| EmailError::NoParentDir {
+        path: path_str.clone(),
+        source: std::io::Error::new(std::io::ErrorKind::NotFound, "No parent directory found"),
+    })?;
+
+    // (subject -> date -> from -> to -> host)
+    for _ in 0..5 {
+        current = current.parent().ok_or_else(|| EmailError::NoParentDir {
             path: path_str.clone(),
-            source: std::io::Error::new(std::io::ErrorKind::NotFound, "No parent directory found"),
-        })?
-        .join("extracted");
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "Unexpected path depth"),
+        })?;
+    }
+    // current is now the host directory (e.g., "posteo.de")
+    // Its parent is the output_dir which is our extracted_root
+    let extracted_root = current.parent().ok_or_else(|| EmailError::NoParentDir {
+        path: path_str.clone(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "No parent directory found for host",
+        ),
+    })?;
+
+    let rel_path = path
+        .strip_prefix(extracted_root)
+        .map_err(|e| EmailError::InvalidPath {
+            path: path_str.clone(),
+            source: e,
+        })?;
+
+    // Remove the filename to get the directory structure
+    let rel_dir = rel_path.parent().ok_or_else(|| EmailError::NoParentDir {
+        path: path_str.clone(),
+        source: std::io::Error::new(std::io::ErrorKind::NotFound, "No parent directory found"),
+    })?;
+
+    // Place extracted/ at the root level (same level as host folders)
+    let email_dir = extracted_root.join("extracted").join(rel_dir);
     fs::create_dir_all(&email_dir)?;
 
     let body = extract_body(&parsed);
@@ -37,41 +67,60 @@ pub fn extract_email(path: &Path) -> Result<()> {
 }
 
 fn extract_body(parsed: &mailparse::ParsedMail) -> (&'static str, String) {
-    // Parse subparts once and cache results
-    let mut text_plain_body: Option<String> = None;
-    let mut text_html_body: Option<String> = None;
-
-    for part in std::iter::once(parsed).chain(parsed.subparts.iter()) {
+    fn handle_part(part: &mailparse::ParsedMail) -> Option<(&'static str, String)> {
+        let content = part.get_body().unwrap_or_default();
         match part.ctype.mimetype.as_str() {
-            "text/plain" => {
-                if text_plain_body.is_none() {
-                    text_plain_body = Some(part.get_body().unwrap_or_default())
+            "text/html" => Some(match html2text::from_read(content.as_bytes(), 80) {
+                Ok(x) => ("md", x),
+                Err(e) => {
+                    eprintln!(
+                        "unable to parse {} to markdown: {e}, returning txt",
+                        part.ctype.mimetype
+                    );
+                    ("html", content)
                 }
-            }
-            "text/html" => {
-                if text_html_body.is_none() {
-                    text_html_body = Some(part.get_body().unwrap_or_default())
-                }
-            }
-            _ => {}
+            }),
+            "text/plain" => Some(("txt", content)),
+            _ => None,
         }
     }
-
-    if let Some(body) = text_plain_body {
-        return ("txt", body);
-    }
-
-    if let Some(html) = text_html_body {
-        match html2text::from_read(html.as_bytes(), 80) {
-            Ok(x) => return ("md", x),
-            Err(e) => {
-                eprintln!("unable to parse HTML to markdown: {e}");
-                return ("html", html);
-            }
+    fn find_bodies(parsed: &[mailparse::ParsedMail]) -> Vec<(&'static str, String)> {
+        if parsed.is_empty() {
+            return Vec::new();
         }
+        let mut results = Vec::with_capacity(2);
+
+        for part in parsed {
+            if let Some(x) = handle_part(part)
+                && !x.1.is_empty()
+            {
+                results.push((x.0, x.1.replace("\r\n", "\n").replace('\r', "\n")));
+            }
+            results.extend(find_bodies(&part.subparts));
+        }
+        results
     }
 
-    ("txt", parsed.get_body().unwrap_or_default())
+    let content = find_bodies(std::slice::from_ref(parsed));
+    if content.len() > 2 {
+        eprintln!("more than two elements:\n\n{:?}", content);
+    }
+    if content.is_empty() {
+        eprintln!("No content");
+    }
+
+    content
+        .iter()
+        .filter_map(|(suffix, content)| {
+            if suffix == &"md" {
+                // meh
+                Some((*suffix, content.clone()))
+            } else {
+                None
+            }
+        })
+        .next()
+        .unwrap_or_else(|| content.into_iter().next().unwrap_or(("txt", String::new())))
 }
 
 fn extract_attachments(
@@ -111,14 +160,29 @@ fn extract_attachments(
 }
 
 fn get_filename_from_headers(headers: &[mailparse::MailHeader]) -> Option<String> {
+    fn extract_filename(value: &str, prefix: &str) -> Option<String> {
+        let pos = value.find(prefix)?;
+        let fname = &value[pos + prefix.len()..];
+        // Extract until first semicolon or end of string
+        let fname = fname.split(';').next().unwrap_or(fname);
+        // Trim whitespace and quotes
+        let fname = fname.trim().trim_matches('"');
+        Some(sanitize_filename(fname))
+    }
+
     for header in headers {
-        if header.get_key().to_uppercase() == "CONTENT-DISPOSITION" {
-            let value = header.get_value();
-            if let Some(pos) = value.find("filename=") {
-                let fname = &value[pos + 9..];
-                let fname = fname.trim_matches('"');
-                return Some(fname.to_string());
-            }
+        let key = header.get_key().to_uppercase();
+        let value = header.get_value();
+
+        // Check Content-Disposition for filename=, fall back to Content-Type for name=
+        if key == "CONTENT-DISPOSITION"
+            && let Some(fname) = extract_filename(&value, "filename=")
+        {
+            return Some(fname);
+        } else if key == "CONTENT-TYPE"
+            && let Some(fname) = extract_filename(&value, "name=")
+        {
+            return Some(fname);
         }
     }
     None
@@ -141,4 +205,81 @@ fn sanitize_filename(filename: &str) -> String {
     }
 
     out
+}
+
+#[cfg(test)]
+mod extracted_text {
+    use super::*;
+
+    #[test]
+    fn unknown() {
+        let raw_email = r#"Content-Transfer-Encoding: quoted-printable
+
+hello"#;
+        let parsed = mailparse::parse_mail(raw_email.as_bytes()).unwrap();
+        let result = extract_body(&parsed);
+        assert_eq!(result, ("txt", "hello".to_string()));
+    }
+
+    #[test]
+    fn text_plain() {
+        let raw_email = r#"Content-Type: text/plain; charset="iso-8859-1"
+Content-Transfer-Encoding: quoted-printable
+
+hello"#;
+        let parsed = mailparse::parse_mail(raw_email.as_bytes()).unwrap();
+        let result = extract_body(&parsed);
+        assert_eq!(result, ("txt", "hello".to_string()));
+    }
+
+    #[test]
+    fn markdown() {
+        let raw_email = r#"Content-Type: text/html; charset="iso-8859-1"
+Content-Transfer-Encoding: quoted-printable
+
+<html><h1>Hello</h1></html>"#;
+        let parsed = mailparse::parse_mail(raw_email.as_bytes()).unwrap();
+        let result = extract_body(&parsed);
+        assert_eq!(result, ("md", "# Hello\n".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod attachment_header_parsing {
+    use super::*;
+
+    #[test]
+    fn content_disposition() {
+        let raw_email = r#"Content-Type: application/pdf; name="Name KT17_33.pdf"
+Content-Description: Name KT17_33.pdf
+Content-Disposition: attachment; filename="Name KT17_33.pdf"; size=342278
+Content-Transfer-Encoding: base64
+
+"#;
+        let parsed = mailparse::parse_mail(raw_email.as_bytes()).unwrap();
+        let result = super::get_filename_from_headers(&parsed.headers);
+        assert_eq!(result, Some("name-kt17_33.pdf".to_string()));
+    }
+
+    #[test]
+    fn no_filename() {
+        let raw_email = r#"Content-Type: text/plain
+Content-Disposition: inline
+
+"#;
+        let parsed = mailparse::parse_mail(raw_email.as_bytes()).unwrap();
+        let result = get_filename_from_headers(&parsed.headers);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn use_from_content_type_when_no_disposition() {
+        let raw_email = r#"Content-Type: application/pdf; name="file.pdf"
+Content-Transfer-Encoding: base64
+
+"#;
+        let parsed = mailparse::parse_mail(raw_email.as_bytes()).unwrap();
+        let result = get_filename_from_headers(&parsed.headers);
+        assert_eq!(result, Some("file.pdf".to_string()));
+    }
 }
