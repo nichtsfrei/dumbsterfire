@@ -25,7 +25,7 @@ pub enum Sha256Error {
     },
 }
 
-pub fn merge_sha256_files(config: &Config) -> Result<()> {
+pub fn merge_sha256_files(config: &Config, last_cheked: Option<String>) -> Result<()> {
     fn split_line(line: &str) -> Option<(&str, &str)> {
         let line = line.trim();
         line.split_once("  ")
@@ -74,19 +74,23 @@ pub fn merge_sha256_files(config: &Config) -> Result<()> {
         }
     }
 
-    // Write to temp file first for atomicity
     let mut sha_file = fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
         .open(&sha_temp_path)?;
 
-    // Sort entries for deterministic output
     let mut sorted_entries: Vec<_> = entries.into_iter().collect();
     sorted_entries.sort_by(|a, b| a.0.cmp(b.0));
 
     for (path, hash) in sorted_entries {
         writeln!(sha_file, "{}  {}", hash, path)?;
+    }
+
+    if let Some(ts) = last_cheked
+        && let Err(error) = fs::rename(&sha_old_path, base_dir.join(format!("sha256sums.{ts}")))
+    {
+        warn!(%error, ts, "Unable to create backup shasum")
     }
 
     fs::rename(&sha_temp_path, &sha_old_path).map_err(|e| Sha256Error::RenameError {

@@ -3,12 +3,12 @@ use std::path::Path;
 
 use anyhow::Result;
 use mailparse::parse_mail;
-use tracing::{info, debug, warn, instrument};
+use tracing::{debug, info, instrument, warn};
 
 use crate::error::EmailError;
 
 #[instrument]
-pub fn extract_email(path: &Path) -> Result<()> {
+pub fn process_from_path(path: &Path) -> Result<()> {
     info!("reading email file");
     let email_data = fs::read(path).map_err(|e| EmailError::ReadEmail {
         path: path.display().to_string(),
@@ -20,53 +20,12 @@ pub fn extract_email(path: &Path) -> Result<()> {
         source: e,
     })?;
 
-    let mut current = path.parent().ok_or_else(|| EmailError::NoParentDir {
+    let current = path.parent().ok_or_else(|| EmailError::NoParentDir {
         path: path.display().to_string(),
         source: std::io::Error::new(std::io::ErrorKind::NotFound, "No parent directory found"),
     })?;
 
-    // (subject -> date -> from -> to -> host)
-    for _ in 0..5 {
-        current = current.parent().ok_or_else(|| EmailError::NoParentDir {
-            path: path.display().to_string(),
-            source: std::io::Error::new(std::io::ErrorKind::NotFound, "Unexpected path depth"),
-        })?;
-    }
-    // current is now the host directory (e.g., "posteo.de")
-    // Its parent is the output_dir which is our extracted_root
-    let extracted_root = current.parent().ok_or_else(|| EmailError::NoParentDir {
-        path: path.display().to_string(),
-        source: std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "No parent directory found for host",
-        ),
-    })?;
-
-    let rel_path = path
-        .strip_prefix(extracted_root)
-        .map_err(|e| EmailError::InvalidPath {
-            path: path.display().to_string(),
-            source: e,
-        })?;
-
-    // Remove the filename to get the directory structure
-    let rel_dir = rel_path.parent().ok_or_else(|| EmailError::NoParentDir {
-        path: path.display().to_string(),
-        source: std::io::Error::new(std::io::ErrorKind::NotFound, "No parent directory found"),
-    })?;
-
-    // Place extracted/ at the root level (same level as host folders)
-    let email_dir = extracted_root.join("extracted").join(rel_dir);
-    info!("creating output directory");
-    fs::create_dir_all(&email_dir)?;
-
-    info!("extracting body");
-    let body = extract_body(&parsed);
-    let body_path = email_dir.join(format!("body.{}", body.0));
-    fs::write(body_path, body.1)?;
-
-    info!("extracting attachments");
-    extract_attachments(&parsed, &email_dir)?;
+    process(&parsed, current)?;
 
     Ok(())
 }
@@ -125,11 +84,14 @@ fn extract_body(parsed: &mailparse::ParsedMail) -> (&'static str, String) {
         .unwrap_or_else(|| content.into_iter().next().unwrap_or(("txt", String::new())))
 }
 
-#[instrument(skip(email, attachments_dir))]
-fn extract_attachments(
-    email: &mailparse::ParsedMail,
-    attachments_dir: &std::path::Path,
-) -> Result<()> {
+#[instrument(skip(email))]
+pub fn process(email: &mailparse::ParsedMail, attachments_dir: &std::path::Path) -> Result<()> {
+    info!("extracting body");
+    let body = extract_body(email);
+    let body_path = attachments_dir.join(format!("body.{}", body.0));
+    fs::write(body_path, body.1)?;
+
+    info!("extracting attachments");
     for part in &email.subparts {
         let headers = &part.headers;
         if let Some(fname) = get_filename_from_headers(headers) {

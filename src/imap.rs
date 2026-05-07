@@ -2,10 +2,13 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 
+use chrono::Utc;
+
 use crate::{
     checksum::merge_sha256_files,
     config::Config,
     error::{DownloadError as Error, Result},
+    labels,
     models::Sanitized,
 };
 use imap::Client;
@@ -34,6 +37,7 @@ pub fn download(config: &Config) -> Result<()> {
     };
 
     let server_dir = PathBuf::from(&config.output_dir).join(&config.host);
+
     fs::create_dir_all(&server_dir)?;
 
     let folders = match session.list(Some(""), Some("%")) {
@@ -47,16 +51,44 @@ pub fn download(config: &Config) -> Result<()> {
         }
     };
 
+    let last_checked_path = server_dir.join("last_checked");
+    let previous_checked_path = server_dir.join("last_checked.previous");
+    let last_checked = fs::read_to_string(&last_checked_path).ok();
+    let search_filter = last_checked
+        .as_ref()
+        .map(|ts| format!("SINCE {ts}"))
+        .unwrap_or_else(|| "ALL".to_string());
+    let mut write_last_checked = true;
+
+    // TODO: use thread_local to handle those concurrently
     for folder in folders.iter() {
         let folder_name = folder.name();
-        if let Err(error) = process_folder(&mut session, folder_name, &server_dir) {
+
+        if let Err(error) = process_folder(&mut session, folder_name, &search_filter, &server_dir) {
+            write_last_checked = false;
             error!(folder = folder_name, error = ?error, "Error processing folder");
         }
     }
+    if write_last_checked {
+        if last_checked_path.exists()
+            && let Err(e) = fs::rename(&last_checked_path, &previous_checked_path)
+        {
+            warn!(target: "imap", "Could not rename last_checked to last_checked.previous: {}", e);
+        }
+
+        let now = Utc::now();
+        let formatted_time = now.format("%d-%b-%Y").to_string();
+        if let Err(e) = fs::write(&last_checked_path, &formatted_time) {
+            warn!(error=%e, "Could not write last_checked file");
+        }
+    }
+
     session.logout()?;
+    merge_sha256_files(config, last_checked)?;
 
     info!("Download complete!");
-    merge_sha256_files(config)?;
+
+    labels::process_emails(&server_dir, &config.label_dir)?;
 
     Ok(())
 }
@@ -65,18 +97,16 @@ pub fn download(config: &Config) -> Result<()> {
 fn process_folder(
     session: &mut imap::Session<native_tls::TlsStream<std::net::TcpStream>>,
     folder: &str,
+    search_filter: &str,
     base_dir: &std::path::Path,
-) -> Result<()> {
+) -> Result<usize> {
     let folder_dir = base_dir.join(Sanitized::from(folder).to_str());
 
     debug!("select");
     session.select(folder)?;
-    // TODO: after processing create timestamp for this folder
-    // TODO: if there is a stpred timestamp use SINCE $timestamp
-    const SEARCH_FILTER: &str = "ALL";
-    info!(filter = SEARCH_FILTER, "search");
+    info!("search");
 
-    let messages = match session.search(SEARCH_FILTER) {
+    let messages = match session.search(search_filter) {
         Ok(m) => m,
         Err(e) => {
             return Err(Error::Search {
@@ -134,13 +164,12 @@ fn process_folder(
                         source: e,
                     })?;
             writeln!(shafile, "{}  {}", hash, email_rel_path.display())?;
-
-            //parse_and_save_attachments(email.as_ref(), &email_dir)?;
+            crate::email::process(email.as_ref(), &email_dir)?;
         }
         info!("processed");
     }
 
     info!("folder processed");
 
-    Ok(())
+    Ok(messages.len())
 }

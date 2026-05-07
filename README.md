@@ -1,6 +1,11 @@
 # dumbsterfire
 
-`dumbsterfire` is like a dumpster-fire but for dumb people that don't care enough for their inbox to be sorted or empty but still go on rampage and remove a lot of emails. It's a CLI tool to download emails from IMAP servers and apply labels based on filter rules—perfect for creating backups of your email accounts or organizing your archived emails.
+`dumbsterfire` is like a dumpster-fire but for dumb people that don't care
+enough for their inbox to be sorted or empty but still go on rampage and remove
+a lot of emails. 
+
+It's a CLI tool to download emails from IMAP servers and apply
+labels based on filter rules.
 
 ## Installation
 

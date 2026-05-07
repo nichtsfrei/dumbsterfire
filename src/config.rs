@@ -7,6 +7,7 @@ pub struct Config {
     pub username: String,
     pub password: String,
     pub output_dir: PathBuf,
+    pub label_dir: PathBuf,
 }
 
 /// Get the default labels directory

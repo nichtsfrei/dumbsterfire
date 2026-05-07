@@ -13,8 +13,7 @@ mod error;
 use crate::cli::Cli;
 use anyhow::Result;
 use clap::Parser;
-use tracing::{info, instrument};
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::config::{Config, default_label_dir, default_output_dir};
 
@@ -32,24 +31,17 @@ fn main() {
     }
 }
 
-#[instrument]
 fn run(cli: Cli) -> Result<()> {
     match cli {
         Cli::Download(args) => {
             let config: Config = args.try_into()?;
-            info!("Starting download");
             imap::download(&config)
         }
         Cli::Label(args) => {
-            // Use provided paths or fall back to defaults
             let output_dir = args.output_dir.unwrap_or_else(default_output_dir);
             let label_dir = args.label_dir.unwrap_or_else(default_label_dir);
-            info!("Processing labels");
-            labels::process_emails(&output_dir, &label_dir, args.extract)
+            labels::process_emails(&output_dir, &label_dir)
         }
-        Cli::Email(args) => {
-            info!("Extracting email");
-            email::extract_email(&args.path)
-        }
+        Cli::Email(args) => email::process_from_path(&args.path),
     }
 }

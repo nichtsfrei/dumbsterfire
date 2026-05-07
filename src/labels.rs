@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn, error, instrument};
+use tracing::{error, info, instrument, warn};
 
-use crate::email::extract_email;
+use crate::email::process_from_path;
 use crate::error::LabelError;
 use crate::filter::{self, CompareResult};
 use crate::models::{Email, EmailHeader};
@@ -76,7 +76,7 @@ impl filter::FieldComparer for PathContainer<'_> {
 /// * `rule_path` - Path to labels directory containing rule.filter files
 /// * `extract_on_match` - If true, extract emails when they match a filter
 #[instrument]
-pub fn process_emails(base_dir: &Path, rule_path: &Path, extract_on_match: bool) -> Result<()> {
+pub fn process_emails(base_dir: &Path, rule_path: &Path) -> Result<()> {
     info!("Reading labels from {}", rule_path.display());
     let labels = serde_json::from_reader(
         File::open(rule_path.join("labels.json")).map_err(LabelError::ReadLabels)?,
@@ -119,7 +119,6 @@ pub fn process_emails(base_dir: &Path, rule_path: &Path, extract_on_match: bool)
             ))
         })?;
 
-        let mut matched_any_label = false;
         for (o, filter) in &filter {
             let mut lookup_file = o;
             let mut found = filter.eval(&PathContainer(path));
@@ -133,25 +132,13 @@ pub fn process_emails(base_dir: &Path, rule_path: &Path, extract_on_match: bool)
             }
 
             if found {
-                matched_any_label = true;
-                writeln!(lookup_file, "{}  {}", hash, path)?;
-            }
-        }
-
-        if matched_any_label && extract_on_match {
-            let email_path = base_dir.join(path);
-            if let Err(e) = extract_email(&email_path) {
-                error!(error = ?e, "Failed to extract email");
-            } else {
                 matched_count += 1;
+                writeln!(lookup_file, "{}  {}", hash, path)?;
             }
         }
     }
 
-    info!(
-        filter_count,
-        matched_count, "Processed emails with filters"
-    );
+    info!(filter_count, matched_count, "labeled");
 
     Ok(())
 }

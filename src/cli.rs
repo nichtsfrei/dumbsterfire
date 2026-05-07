@@ -1,6 +1,6 @@
 use std::{io::stdin, path::PathBuf};
 
-use crate::config::{Config, default_output_dir};
+use crate::config::{Config, default_label_dir, default_output_dir};
 use anyhow::Result;
 use clap::{Args, Parser};
 
@@ -39,9 +39,11 @@ pub struct DownloadArgs {
     #[arg(long, env = "OUTPUT_DIR")]
     pub output_dir: Option<PathBuf>,
 
-    /// Read password from stdin instead of CLI flag or env var
     #[arg(long, conflicts_with = "password")]
     pub password_from_stdin: bool,
+
+    #[arg(long, env = "LABEL_DIR")]
+    pub label_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -51,10 +53,6 @@ pub struct LabelArgs {
 
     #[arg(long, env = "OUTPUT_DIR")]
     pub output_dir: Option<PathBuf>,
-
-    /// Extract matched emails (attachments, body) when applying labels
-    #[arg(long)]
-    pub extract: bool,
 }
 
 impl TryFrom<DownloadArgs> for Config {
@@ -74,12 +72,14 @@ impl TryFrom<DownloadArgs> for Config {
             })?
         };
         let output_dir = value.output_dir.unwrap_or_else(default_output_dir);
+        let label_dir = value.label_dir.unwrap_or_else(default_label_dir);
         Ok(Config {
             host: value.host,
             port: value.port,
             username,
             password,
             output_dir,
+            label_dir,
         })
     }
 }
