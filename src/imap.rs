@@ -12,7 +12,9 @@ use imap::Client;
 use mailparse::parse_mail;
 use native_tls::TlsConnector;
 use sha2::{Digest, Sha256};
+use tracing::{debug, error, info, instrument, warn};
 
+#[instrument(skip_all, fields(host = config.host, output = %config.output_dir.display()))]
 pub fn download(config: &Config) -> Result<()> {
     let connector = TlsConnector::new()?;
     let stream = std::net::TcpStream::connect((config.host.as_str(), config.port))?;
@@ -48,17 +50,18 @@ pub fn download(config: &Config) -> Result<()> {
     for folder in folders.iter() {
         let folder_name = folder.name();
         if let Err(error) = process_folder(&mut session, folder_name, &server_dir) {
-            eprintln!("Error processing folder {folder_name}: {error}");
+            error!(folder = folder_name, error = ?error, "Error processing folder");
         }
     }
     session.logout()?;
 
-    println!("Download complete!");
+    info!("Download complete!");
     merge_sha256_files(config)?;
 
     Ok(())
 }
 
+#[instrument(skip(session, base_dir))]
 fn process_folder(
     session: &mut imap::Session<native_tls::TlsStream<std::net::TcpStream>>,
     folder: &str,
@@ -66,12 +69,12 @@ fn process_folder(
 ) -> Result<()> {
     let folder_dir = base_dir.join(Sanitized::from(folder).to_str());
 
-    println!("{folder}\tselect");
+    debug!("select");
     session.select(folder)?;
     // TODO: after processing create timestamp for this folder
     // TODO: if there is a stpred timestamp use SINCE $timestamp
     const SEARCH_FILTER: &str = "ALL";
-    println!("{folder}\tsearch\t{SEARCH_FILTER}");
+    info!(filter = SEARCH_FILTER, "search");
 
     let messages = match session.search(SEARCH_FILTER) {
         Ok(m) => m,
@@ -83,15 +86,13 @@ fn process_folder(
             .into());
         }
     };
+    info!(count = messages.len(), "found messages");
+
     for (idx, uid) in messages.iter().enumerate() {
-        print!("{folder}:{idx}/{}\tdownloading\t", messages.len());
+        info!(uid, index = idx, total = messages.len(), "fetching");
         let fetch = match session.fetch(uid.to_string(), "RFC822") {
-            Ok(f) => {
-                println!("s");
-                f
-            }
+            Ok(f) => f,
             Err(e) => {
-                println!("f");
                 return Err(Error::Fetch {
                     folder: folder.to_string(),
                     uid: *uid,
@@ -101,11 +102,7 @@ fn process_folder(
             }
         };
 
-        println!(
-            "{folder}:{idx}/{}\tstoring\t{}",
-            messages.len(),
-            fetch.len()
-        );
+        debug!(len = fetch.len(), "storing");
         // Potentially a bug that we just care about first?
         if let Some(msg) = fetch.first()
             && let Some(email_data) = msg.body()
@@ -140,10 +137,10 @@ fn process_folder(
 
             //parse_and_save_attachments(email.as_ref(), &email_dir)?;
         }
-        println!("{folder}:{idx}/{}\tprocessed", messages.len(),);
+        info!("processed");
     }
 
-    println!("{folder}\tprocessed");
+    info!("folder processed");
 
     Ok(())
 }

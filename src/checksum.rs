@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use thiserror::Error;
+use tracing::warn;
 
 use crate::config::Config;
 
@@ -13,8 +14,8 @@ pub enum Sha256Error {
     #[error(transparent)]
     IOError(#[from] std::io::Error),
 
-    #[error("Invalid SHA256 line format in '{path}': {line}")]
-    InvalidLineFormat { path: String, line: String },
+    #[error("Invalid SHA256 line format: {line}")]
+    InvalidLineFormat { line: String },
 
     #[error("Failed to rename '{from}' to '{to}': {source}")]
     RenameError {
@@ -58,7 +59,6 @@ pub fn merge_sha256_files(config: &Config) -> Result<()> {
             entries.insert(path, hash_sum);
         } else {
             bail!(Sha256Error::InvalidLineFormat {
-                path: sha_new_path.display().to_string(),
                 line: line.to_string(),
             });
         }
@@ -70,10 +70,7 @@ pub fn merge_sha256_files(config: &Config) -> Result<()> {
                 entries.insert(path, hash_sum);
             }
         } else {
-            eprintln!(
-                "Warning: Skipping invalid line in old SHA256 file: {}",
-                line
-            );
+            warn!("Skipping invalid line in old SHA256 file");
         }
     }
 

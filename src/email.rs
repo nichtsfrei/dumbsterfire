@@ -3,37 +3,39 @@ use std::path::Path;
 
 use anyhow::Result;
 use mailparse::parse_mail;
+use tracing::{info, debug, warn, instrument};
 
 use crate::error::EmailError;
 
+#[instrument]
 pub fn extract_email(path: &Path) -> Result<()> {
-    let path_str = path.to_str().unwrap_or("<non-utf8 path>").to_string();
-
+    info!("reading email file");
     let email_data = fs::read(path).map_err(|e| EmailError::ReadEmail {
-        path: path_str.clone(),
+        path: path.display().to_string(),
         source: e,
     })?;
+    info!("parsing email");
     let parsed = parse_mail(&email_data).map_err(|e| EmailError::ParseEmail {
-        path: path_str.clone(),
+        path: path.display().to_string(),
         source: e,
     })?;
 
     let mut current = path.parent().ok_or_else(|| EmailError::NoParentDir {
-        path: path_str.clone(),
+        path: path.display().to_string(),
         source: std::io::Error::new(std::io::ErrorKind::NotFound, "No parent directory found"),
     })?;
 
     // (subject -> date -> from -> to -> host)
     for _ in 0..5 {
         current = current.parent().ok_or_else(|| EmailError::NoParentDir {
-            path: path_str.clone(),
+            path: path.display().to_string(),
             source: std::io::Error::new(std::io::ErrorKind::NotFound, "Unexpected path depth"),
         })?;
     }
     // current is now the host directory (e.g., "posteo.de")
     // Its parent is the output_dir which is our extracted_root
     let extracted_root = current.parent().ok_or_else(|| EmailError::NoParentDir {
-        path: path_str.clone(),
+        path: path.display().to_string(),
         source: std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "No parent directory found for host",
@@ -43,40 +45,41 @@ pub fn extract_email(path: &Path) -> Result<()> {
     let rel_path = path
         .strip_prefix(extracted_root)
         .map_err(|e| EmailError::InvalidPath {
-            path: path_str.clone(),
+            path: path.display().to_string(),
             source: e,
         })?;
 
     // Remove the filename to get the directory structure
     let rel_dir = rel_path.parent().ok_or_else(|| EmailError::NoParentDir {
-        path: path_str.clone(),
+        path: path.display().to_string(),
         source: std::io::Error::new(std::io::ErrorKind::NotFound, "No parent directory found"),
     })?;
 
     // Place extracted/ at the root level (same level as host folders)
     let email_dir = extracted_root.join("extracted").join(rel_dir);
+    info!("creating output directory");
     fs::create_dir_all(&email_dir)?;
 
+    info!("extracting body");
     let body = extract_body(&parsed);
     let body_path = email_dir.join(format!("body.{}", body.0));
     fs::write(body_path, body.1)?;
 
+    info!("extracting attachments");
     extract_attachments(&parsed, &email_dir)?;
 
     Ok(())
 }
 
+#[instrument(skip(parsed))]
 fn extract_body(parsed: &mailparse::ParsedMail) -> (&'static str, String) {
     fn handle_part(part: &mailparse::ParsedMail) -> Option<(&'static str, String)> {
         let content = part.get_body().unwrap_or_default();
         match part.ctype.mimetype.as_str() {
             "text/html" => Some(match html2text::from_read(content.as_bytes(), 80) {
                 Ok(x) => ("md", x),
-                Err(e) => {
-                    eprintln!(
-                        "unable to parse {} to markdown: {e}, returning txt",
-                        part.ctype.mimetype
-                    );
+                Err(_e) => {
+                    debug!(mimetype = ?part.ctype.mimetype, "unable to parse to markdown, returning html");
                     ("html", content)
                 }
             }),
@@ -103,17 +106,16 @@ fn extract_body(parsed: &mailparse::ParsedMail) -> (&'static str, String) {
 
     let content = find_bodies(std::slice::from_ref(parsed));
     if content.len() > 2 {
-        eprintln!("more than two elements:\n\n{:?}", content);
+        debug!(count = content.len(), "more than two content parts found");
     }
     if content.is_empty() {
-        eprintln!("No content");
+        warn!("No content found in email");
     }
 
     content
         .iter()
         .filter_map(|(suffix, content)| {
             if suffix == &"md" {
-                // meh
                 Some((*suffix, content.clone()))
             } else {
                 None
@@ -123,6 +125,7 @@ fn extract_body(parsed: &mailparse::ParsedMail) -> (&'static str, String) {
         .unwrap_or_else(|| content.into_iter().next().unwrap_or(("txt", String::new())))
 }
 
+#[instrument(skip(email, attachments_dir))]
 fn extract_attachments(
     email: &mailparse::ParsedMail,
     attachments_dir: &std::path::Path,
@@ -151,7 +154,7 @@ fn extract_attachments(
                     path: attachment_path.display().to_string(),
                     source: e,
                 })?;
-                println!("Extracted attachment: {}", attachment_path.display());
+                info!(path = ?attachment_path, "Extracted attachment");
             }
         }
     }
@@ -159,6 +162,7 @@ fn extract_attachments(
     Ok(())
 }
 
+#[instrument(skip(headers))]
 fn get_filename_from_headers(headers: &[mailparse::MailHeader]) -> Option<String> {
     fn extract_filename(value: &str, prefix: &str) -> Option<String> {
         let pos = value.find(prefix)?;

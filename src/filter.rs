@@ -304,6 +304,7 @@ mod tests {
 mod parse {
 
     use super::{Filter, FilterError, Parser};
+    use tracing::debug;
 
     #[test]
     fn and_or_not() -> Result<(), FilterError> {
@@ -318,7 +319,7 @@ mod parse {
 
         let mut parser = Parser::new(input);
         let ast = parser.parse()?;
-        dbg!(&ast);
+        debug!("parsed AST");
 
         match ast {
             Filter::And(children) => {

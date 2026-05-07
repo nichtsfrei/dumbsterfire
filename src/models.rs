@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, FixedOffset};
 use mailparse::ParsedMail;
+use tracing::warn;
 
 use crate::filter;
 
@@ -70,8 +71,8 @@ impl From<&Email<'_>> for EmailHeader {
                 "subject" => a.subject = b.get_value(),
                 "date" => match chrono::DateTime::parse_from_rfc2822(&b.get_value()) {
                     Ok(x) => a.date = x,
-                    Err(error) => {
-                        dbg!(error);
+                    Err(_error) => {
+                        warn!("Failed to parse date header");
                     }
                 },
                 "from" => a.from = b.get_value(),
@@ -99,8 +100,8 @@ impl filter::FieldComparer for EmailHeader {
             "to" => &self.to,
             "path" => &self.to_path(&PathBuf::new()).to_string_lossy().into_owned(),
             "body" | "content" => &self.body,
-            unknown => {
-                eprintln!("Unknown field: {unknown}");
+            _unknown => {
+                warn!("Unknown field");
                 return filter::CompareResult::NotApplicable;
             }
         };

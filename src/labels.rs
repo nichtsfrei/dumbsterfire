@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use tracing::{info, warn, error, instrument};
 
 use crate::email::extract_email;
 use crate::error::LabelError;
@@ -34,10 +35,7 @@ fn create_filter(
         .filter_map(|label| {
             let rule_path = filter_base.join(label).join("rule.filter");
             if !rule_path.exists() {
-                eprintln!(
-                    "Warning: Filter file not found for label '{}', skipping",
-                    label
-                );
+                warn!("Filter file not found for label, skipping");
                 return None;
             }
 
@@ -77,15 +75,16 @@ impl filter::FieldComparer for PathContainer<'_> {
 /// * `base_dir` - Base directory containing downloaded emails
 /// * `rule_path` - Path to labels directory containing rule.filter files
 /// * `extract_on_match` - If true, extract emails when they match a filter
+#[instrument]
 pub fn process_emails(base_dir: &Path, rule_path: &Path, extract_on_match: bool) -> Result<()> {
-    println!("Using {}", rule_path.display());
+    info!("Reading labels from {}", rule_path.display());
     let labels = serde_json::from_reader(
         File::open(rule_path.join("labels.json")).map_err(LabelError::ReadLabels)?,
     )
     .map_err(LabelError::ParseLabels)?;
     let content: Vec<_> = create_filter(base_dir, rule_path, &labels);
     if content.is_empty() {
-        eprintln!("Warning: No filter rules found in {rule_path:?}");
+        warn!("No filter rules found");
     }
     let filter: Vec<_> = content
         .iter()
@@ -142,16 +141,16 @@ pub fn process_emails(base_dir: &Path, rule_path: &Path, extract_on_match: bool)
         if matched_any_label && extract_on_match {
             let email_path = base_dir.join(path);
             if let Err(e) = extract_email(&email_path) {
-                eprintln!("Warning: Failed to extract email {path}: {e}");
+                error!(error = ?e, "Failed to extract email");
             } else {
                 matched_count += 1;
             }
         }
     }
 
-    println!(
-        "Processed {} emails, matched {} with filters",
-        filter_count, matched_count
+    info!(
+        filter_count,
+        matched_count, "Processed emails with filters"
     );
 
     Ok(())
