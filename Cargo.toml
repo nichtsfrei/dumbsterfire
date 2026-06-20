@@ -9,7 +9,8 @@ chrono = { version = "0", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 hex = "0"
 html2text = "0"
-imap = "2"
+io-imap = { version = "0.1", default-features = false, features = ["native-tls"] }
+pimalaya-stream = { version = "0.0.1", features = ["native-tls"] }
 mailparse = "0"
 native-tls = "0"
 serde = { version = "1", features = ["derive"] }
@@ -18,3 +19,5 @@ sha2 = "0"
 thiserror = "2"
 tracing = { version = "0", features = ["max_level_debug", "release_max_level_debug", "attributes"] }
 tracing-subscriber = { version = "0", features = ["env-filter", "fmt"] }
+url = "2"
+vec1 = "1"

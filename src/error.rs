@@ -3,7 +3,7 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum DownloadError {
     #[error("IMAP error: {0}")]
-    Imap(#[from] imap::Error),
+    Imap(#[from] io_imap::client::ImapClientStdError),
 
     #[error("TLS connection failed: {0}")]
     Tls(#[from] native_tls::Error),
@@ -31,7 +31,7 @@ pub enum DownloadError {
     Search {
         folder: String,
         #[source]
-        source: imap::Error,
+        source: io_imap::client::ImapClientStdError,
     },
 
     #[error("Fetch failed for UID {uid} in folder '{folder}'")]
@@ -39,7 +39,7 @@ pub enum DownloadError {
         folder: String,
         uid: u32,
         #[source]
-        source: imap::Error,
+        source: io_imap::client::ImapClientStdError,
     },
 
     #[error("SHA256 error: {0}")]
@@ -105,13 +105,6 @@ pub enum EmailError {
 
     #[error("Failed to decode attachment '{path}': {err_msg}")]
     DecodeAttachment { path: String, err_msg: String },
-
-    #[error("Email path '{path}' is not valid: {source}")]
-    InvalidPath {
-        path: String,
-        #[source]
-        source: std::path::StripPrefixError,
-    },
 }
 
 pub type Result<T> = std::result::Result<T, anyhow::Error>;

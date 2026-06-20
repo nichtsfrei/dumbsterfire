@@ -3,14 +3,12 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
-use tracing::{error, info, instrument, warn};
-
-use crate::email::process_from_path;
 use crate::error::LabelError;
 use crate::filter::{self, CompareResult};
 use crate::models::{Email, EmailHeader};
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use tracing::{info, instrument, warn};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Translation {
