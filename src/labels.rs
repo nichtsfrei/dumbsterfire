@@ -35,7 +35,7 @@ fn create_filter(
         .filter_map(|label| {
             let rule_path = filter_base.join(label).join("rule.filter");
             if !rule_path.exists() {
-                warn!("Filter file not found for label, skipping");
+                warn!(label, "Filter file not found for label, skipping");
                 return None;
             }
 
